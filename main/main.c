@@ -111,7 +111,7 @@ static bool have_sta_creds(void);
 // Very small inline page (keep size minimal). You can style further if flash allows.
 static const char *CAPTIVE_FORM_HTML =
 "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
-"<title>Config Wi-Fi</title><style>body{font-family:Arial;margin:24px;background:#f2f2f2;}"
+"<title>Config Wi-Fi</title><style>body{font-family:Arial;margin:24px;background:#f2f2f2;}*{box-sizing:border-box}"
 "h1{font-size:18px;}form{background:#fff;padding:16px;border-radius:8px;box-shadow:0 2px 4px #0002;}"
 "label{display:block;margin-top:12px;font-weight:600;}input{width:100%;padding:8px;margin-top:4px;}"
 "button{margin-top:16px;padding:10px 14px;background:#1976d2;color:#fff;border:0;border-radius:4px;font-size:14px;}"
@@ -119,7 +119,7 @@ static const char *CAPTIVE_FORM_HTML =
 ".net{list-style:none;padding:0;margin:16px 0;} .net li{background:#fff;margin:6px 0;padding:10px;border-radius:8px;box-shadow:0 1px 3px #0002;display:flex;justify-content:space-between;align-items:center;cursor:pointer;}"
 ".sec{font-size:12px;color:#555;margin-left:8px;} .rssi{font-size:12px;color:#333;} .row{display:flex;gap:8px;align-items:center;}"
 ".actions{display:flex;gap:8px;align-items:center;margin-top:8px;} .btn{background:#555;color:#fff;border:0;border-radius:4px;padding:6px 10px;cursor:pointer;} .btn:disabled{opacity:.6;cursor:default;}"
-".pw-wrap{position:relative;} .pw-wrap input{padding-right:78px;} .pw-toggle{position:absolute;top:50%;right:6px;transform:translateY(-50%);background:#1976d2;color:#fff;border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer;} .pw-toggle:active{transform:translateY(-50%) scale(.96);}"
+".pw-wrap{display:flex;align-items:center;gap:8px;} .pw-wrap input{flex:1;min-width:0;} .pw-toggle{flex:0 0 auto;background:#1976d2;color:#fff;border:0;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer;line-height:1;display:inline-flex;align-items:center;justify-content:center;height:34px;} .pw-toggle:active{transform:scale(.98);}"
 "</style></head><body>"
 "<h1>Configurar Wi‑Fi</h1>"
 "<form method=POST action='/submit' onsubmit=\"document.getElementById('submitBtn').disabled=true;\">"
@@ -140,6 +140,7 @@ static const char *CAPTIVE_FORM_HTML =
 "document.addEventListener('DOMContentLoaded',()=>{ loadScan(); });"
 "</script>"
 "</body></html>";
+
 
 static httpd_handle_t s_captive_httpd = NULL; // custom http server shared with provisioning
 static TaskHandle_t s_dns_task = NULL;       // captive DNS server task
