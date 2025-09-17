@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #include "esp_system.h"
 #include "esp_mac.h"   // for esp_read_mac() and ESP_MAC_WIFI_STA
@@ -41,7 +42,7 @@
 #include "lwip/inet.h"
 
 // ========================= Config =========================
-#define FIRMWARE_VERSION "1.6"
+#define FIRMWARE_VERSION "1.7"
 #define URL_ADD_TDS                     "https://smartsensordesign.xyz/flowhall/api/add-tds"
 
 // Wi-Fi credentials now provided only via BLE provisioning (no hardcoded defaults)
@@ -145,6 +146,67 @@ static const char *CAPTIVE_FORM_HTML =
 static httpd_handle_t s_captive_httpd = NULL; // custom http server shared with provisioning
 static TaskHandle_t s_dns_task = NULL;       // captive DNS server task
 static volatile bool s_dns_stop = false;
+// Captive scan task state
+static TaskHandle_t s_scan_task = NULL;
+static volatile bool s_scan_stop = false;
+static volatile bool s_scan_request = false; // request immediate scan
+static char s_scan_json[2048] = "[]"; // cached scan result JSON
+static uint64_t s_scan_last_ms = 0;
+static void scan_captive_task(void* pv) {
+    const TickType_t interval = pdMS_TO_TICKS(7000);
+    for (;;) {
+        if (s_scan_stop) break;
+        uint64_t now = (uint64_t)(esp_timer_get_time()/1000ULL);
+        bool do_scan = s_scan_request || (now - s_scan_last_ms > 12000);
+        s_scan_request = false;
+        if (do_scan && s_portal_active) {
+            wifi_scan_config_t sc = {0};
+            sc.show_hidden = false;
+            sc.scan_type = WIFI_SCAN_TYPE_PASSIVE;
+            sc.scan_time.passive = 60; // ms per channel
+            (void)esp_wifi_scan_stop();
+            if (esp_wifi_scan_start(&sc, true) == ESP_OK) {
+                uint16_t num = 0;
+                esp_wifi_scan_get_ap_num(&num);
+                if (num > 24) num = 24;
+                wifi_ap_record_t *recs = NULL;
+                if (num > 0) {
+                    recs = (wifi_ap_record_t*)calloc(num, sizeof(wifi_ap_record_t));
+                    if (recs) esp_wifi_scan_get_ap_records(&num, recs);
+                }
+                char buf[sizeof(s_scan_json)]; size_t off = 0; buf[0] = '['; off=1;
+                for (uint16_t i=0; i<num; ++i) {
+                    const wifi_ap_record_t* r=&recs[i];
+                    char ssid_esc[2*33]; size_t se=0;
+                    for (int k=0; k<32 && r->ssid[k]; ++k) {
+                        char c=r->ssid[k];
+                        if (c=='"' || c=='\\') { if (se < sizeof(ssid_esc)-2) { ssid_esc[se++]='\\'; ssid_esc[se++]=c; } }
+                        else { if (se < sizeof(ssid_esc)-1) ssid_esc[se++]=c; }
+                    }
+                    if (se < sizeof(ssid_esc)) ssid_esc[se]=0;
+                    int n = snprintf(buf+off, (off<sizeof(buf)? sizeof(buf)-off:0), "%s{\"ssid\":\"%s\",\"rssi\":%d,\"authmode\":%d}",
+                                     (i?",":""), ssid_esc, (int)r->rssi, (int)r->authmode);
+                    if (n > 0) {
+                        off += (size_t)n;
+                    }
+                    if (off >= sizeof(buf) - 2) {
+                        off = sizeof(buf) - 2;
+                        break;
+                    }
+                }
+                if (off < sizeof(buf) - 1) {
+                    buf[off++] = ']';
+                }
+                buf[off] = 0;
+                strncpy(s_scan_json, buf, sizeof(s_scan_json)-1); s_scan_json[sizeof(s_scan_json)-1]=0;
+                if (recs) free(recs);
+                s_scan_last_ms = (uint64_t)(esp_timer_get_time()/1000ULL);
+            }
+        }
+        vTaskDelay(interval);
+    }
+    s_scan_task = NULL; vTaskDelete(NULL);
+}
 
 // Parse very small application/x-www-form-urlencoded body (ssid=..&password=..)
 static void url_decode_inplace(char *s) {
@@ -223,57 +285,11 @@ static const char* authmode_to_str(wifi_auth_mode_t m) {
 }
 
 static esp_err_t scan_get_handler(httpd_req_t *req) {
-    // Run a blocking scan (simple) and return JSON array
-    // If STA is currently connecting, scanning is disallowed. When portal is active,
-    // explicitly cancel any in-progress STA connect so scan can proceed.
-    if (s_portal_active) {
-        esp_wifi_disconnect();
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    wifi_scan_config_t sc = { 0 };
-    sc.show_hidden = false;
-    sc.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    (void)esp_wifi_scan_stop();
-    esp_err_t err = esp_wifi_scan_start(&sc, true /*block*/);
+    // Serve cached scan JSON immediately to keep the portal stable
     httpd_resp_set_type(req, "application/json");
-    if (err != ESP_OK) {
-        // Indicate busy state so UI can show a helpful message
-        httpd_resp_sendstr(req, "[]");
-        return ESP_OK;
-    }
-    uint16_t num = 0;
-    esp_wifi_scan_get_ap_num(&num);
-    if (num > 24) num = 24; // cap to keep JSON small
-    wifi_ap_record_t *recs = NULL;
-    if (num > 0) {
-        recs = (wifi_ap_record_t*)calloc(num, sizeof(wifi_ap_record_t));
-        if (recs) esp_wifi_scan_get_ap_records(&num, recs);
-    }
-
-    // Stream JSON to avoid large stack buffers
-    httpd_resp_sendstr_chunk(req, "[");
-    for (uint16_t i = 0; i < num; ++i) {
-        const wifi_ap_record_t* r = &recs[i];
-        // Ensure SSID is JSON-safe: replace quotes/backslashes minimally
-        char ssid_escaped[2*33]; size_t se=0;
-        for (int k=0; k<32 && r->ssid[k]; ++k) {
-            char c = r->ssid[k];
-            if (c=='"' || c=='\\') {
-                if (se < sizeof(ssid_escaped)-2) { ssid_escaped[se++]='\\'; ssid_escaped[se++]=c; }
-            } else {
-                if (se < sizeof(ssid_escaped)-1) ssid_escaped[se++]=c;
-            }
-        }
-        if (se < sizeof(ssid_escaped)) ssid_escaped[se] = 0;
-
-        char item[128];
-        int n = snprintf(item, sizeof(item), "%s{\"ssid\":\"%s\",\"rssi\":%d,\"authmode\":%d}",
-                         (i?",":""), ssid_escaped, (int)r->rssi, (int)r->authmode);
-        if (n > 0) httpd_resp_send_chunk(req, item, (size_t)n);
-    }
-    httpd_resp_sendstr_chunk(req, "]");
-    httpd_resp_send_chunk(req, NULL, 0); // end
-    if (recs) free(recs);
+    httpd_resp_sendstr(req, s_scan_json[0] ? s_scan_json : "[]");
+    // Hint background task to refresh soon
+    s_scan_request = true;
     return ESP_OK;
 }
 
@@ -522,6 +538,10 @@ static void start_portal(void) {
     // Start DNS hijack task
     s_dns_stop = false;
     if (!s_dns_task) xTaskCreate(dns_server_task, "dns_captive", 3072, NULL, 4, &s_dns_task);
+    // Start background Wi-Fi scan task to populate /scan cache
+    s_scan_stop = false;
+    s_scan_request = true; // do an initial scan fast
+    if (!s_scan_task) xTaskCreatePinnedToCore(scan_captive_task, "scan_captive", 4096, NULL, 4, &s_scan_task, tskNO_AFFINITY);
     s_portal_active = true;
     ESP_LOGI(TAG, "Portal started SSID=%s", ap.ap.ssid);
 }
@@ -535,6 +555,12 @@ static void stop_portal(void) {
         // Let task exit via timeout
         vTaskDelay(pdMS_TO_TICKS(250));
         s_dns_task = NULL;
+    }
+    // Stop scan task
+    s_scan_stop = true;
+    if (s_scan_task) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        s_scan_task = NULL;
     }
     EventBits_t bits = xEventGroupGetBits(s_wifi_event_group);
     if (bits & WIFI_CONNECTED_BIT) {
