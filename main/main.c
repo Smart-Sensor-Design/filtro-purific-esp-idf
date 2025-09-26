@@ -265,7 +265,7 @@ static esp_err_t submit_post_handler(httpd_req_t *req) {
         "<p class=muted>Esta tela deve fechar automaticamente assim que o dispositivo se conectar.</p>"
         "<a class=btn href='http://192.168.4.1/'>Voltar ao portal agora</a>"
         "</div>"
-        "<script>setTimeout(function(){var m=document.getElementById('msg');m.textContent='Não foi possível conectar. Voltando ao portal para revisar as credenciais...';setTimeout(function(){location.href='http://192.168.4.1/';},1500);},15000);</script>"
+        "<script>setTimeout(function(){var m=document.getElementById('msg');m.textContent='Não foi possível conectar. Voltando ao portal para revisar as credenciais...';setTimeout(function(){location.href='http://192.168.4.1/';},1500);},20000);</script>"
         "</body></html>");
     return ESP_OK;
 }
@@ -727,15 +727,24 @@ static update_status_t get_update_status(void) {
 static void mqtt_init_and_start(void);
 
 static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, void* data) {
+    // Rate-limit STA reconnect attempts to avoid thrashing while APSTA portal runs
+    static uint64_t s_last_sta_connect_ms = 0;
+    uint64_t now_ms = (uint64_t)(esp_timer_get_time()/1000ULL);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        // Only auto-connect if portal is not active
-        if (!s_portal_active) esp_wifi_connect();
+        // Always attempt reconnect (also when portal is active) so we auto-recover if Wi‑Fi returns
+        if (now_ms - s_last_sta_connect_ms >= 3000) {
+            if (s_portal_active) ESP_LOGI(TAG, "Portal active: attempting STA reconnect");
+            esp_wifi_connect();
+            s_last_sta_connect_ms = now_ms;
+        }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t* e = (wifi_event_sta_disconnected_t*)data;
         ESP_LOGW(TAG, "WiFi disconnected (reason=%d), handling...", e ? e->reason : -1);
-        // If portal is active, don't auto-reconnect so scans can run and user can retry
-        if (!s_portal_active) {
+        // Keep trying to reconnect even if the portal is active (background STA attempt)
+        if (now_ms - s_last_sta_connect_ms >= 3000) {
+            if (s_portal_active) ESP_LOGI(TAG, "Portal active: attempting STA reconnect");
             esp_wifi_connect();
+            s_last_sta_connect_ms = now_ms;
         }
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         s_wifi_disconnects++;
@@ -1584,6 +1593,18 @@ void app_main(void) {
     gpio_set_level(PIN_DIR_SHARED, 0);
 
     ESP_LOGI(TAG, "Stepper GPIOs initialized (driver disabled, channels asleep)");
+
+    // --- Log current logic level of GPIO0 at startup ---
+    // Configure GPIO0 as input (it might already be used for boot / strapping, so keep it simple)
+    gpio_config_t io0_cfg = {0};
+    io0_cfg.pin_bit_mask = (1ULL << GPIO_NUM_0);
+    io0_cfg.mode = GPIO_MODE_INPUT;
+    io0_cfg.pull_up_en = GPIO_PULLUP_DISABLE; // adjust if board has external pull-ups/downs
+    io0_cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io0_cfg.intr_type = GPIO_INTR_DISABLE;
+    gpio_config(&io0_cfg);
+    int io0_level = gpio_get_level(GPIO_NUM_0);
+    ESP_LOGI(TAG, "GPIO0 initial level: %s", io0_level ? "HIGH" : "LOW");
 
     // Button watcher
     xTaskCreate(wifi_reset_task, "wifi_reset_task", 3072, NULL, 5, NULL);
