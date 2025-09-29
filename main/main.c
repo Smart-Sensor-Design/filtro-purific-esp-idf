@@ -42,7 +42,7 @@
 #include "lwip/inet.h"
 
 // ========================= Config =========================
-#define FIRMWARE_VERSION "1.7"
+#define FIRMWARE_VERSION "1.8"
 #define URL_ADD_TDS                     "https://smartsensordesign.xyz/flowhall/api/add-tds"
 
 // Wi-Fi credentials now provided only via BLE provisioning (no hardcoded defaults)
@@ -90,6 +90,9 @@ static bool   s_tds_valid = false; // true se houve leitura TDS recente
 // Timing
 #define HEARTBEAT_INTERVAL_MS   30000
 #define SEND_INTERVAL_MS        3000
+// Network failure watchdog: if multiple failures happen in a short window, open portal
+#define NET_FAIL_WINDOW_MS       30000
+#define NET_FAIL_THRESHOLD       4
 
 // ==========================================================
 
@@ -105,6 +108,13 @@ static bool s_portal_recovery = false; // after submit, re-show portal on first 
 static void start_portal(void);
 static void stop_portal(void);
 static bool have_sta_creds(void);
+// STA reconnect pacing and timer
+static uint64_t s_last_sta_connect_ms = 0;
+static esp_timer_handle_t s_sta_reconnect_timer = NULL;
+static void sta_reconnect_cb(void* arg);
+// Connectivity watchdog state
+static int s_net_failures = 0;
+static uint64_t s_net_first_fail_ms = 0;
 
 // (Old provisioning forward decls removed)
 
@@ -521,6 +531,9 @@ static void start_portal(void) {
     ap.ap.beacon_interval = 100;
     esp_wifi_set_config(WIFI_IF_AP, &ap);
     esp_wifi_start();
+    if (have_sta_creds()) {
+        esp_wifi_connect();
+    }
     start_captive_httpd();
     // Ensure DHCP hands out AP IP as DNS so probes resolve here
     esp_netif_t* ap_netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
@@ -728,11 +741,10 @@ static void mqtt_init_and_start(void);
 
 static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, void* data) {
     // Rate-limit STA reconnect attempts to avoid thrashing while APSTA portal runs
-    static uint64_t s_last_sta_connect_ms = 0;
     uint64_t now_ms = (uint64_t)(esp_timer_get_time()/1000ULL);
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         // Always attempt reconnect (also when portal is active) so we auto-recover if Wi‑Fi returns
-        if (now_ms - s_last_sta_connect_ms >= 3000) {
+        if (s_last_sta_connect_ms == 0 || (now_ms - s_last_sta_connect_ms) >= 3000) {
             if (s_portal_active) ESP_LOGI(TAG, "Portal active: attempting STA reconnect");
             esp_wifi_connect();
             s_last_sta_connect_ms = now_ms;
@@ -741,10 +753,30 @@ static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, voi
         wifi_event_sta_disconnected_t* e = (wifi_event_sta_disconnected_t*)data;
         ESP_LOGW(TAG, "WiFi disconnected (reason=%d), handling...", e ? e->reason : -1);
         // Keep trying to reconnect even if the portal is active (background STA attempt)
-        if (now_ms - s_last_sta_connect_ms >= 3000) {
+        uint64_t elapsed = now_ms - s_last_sta_connect_ms;
+        if (elapsed >= 3000) {
             if (s_portal_active) ESP_LOGI(TAG, "Portal active: attempting STA reconnect");
             esp_wifi_connect();
             s_last_sta_connect_ms = now_ms;
+        } else {
+            // Schedule a retry for when the pacing window elapses
+            uint64_t delay_ms = 3000 - elapsed;
+            if (!s_sta_reconnect_timer) {
+                const esp_timer_create_args_t targs = {
+                    .callback = sta_reconnect_cb,
+                    .arg = NULL,
+                    .dispatch_method = ESP_TIMER_TASK,
+                    .name = "sta_reconnect"
+                };
+                if (esp_timer_create(&targs, &s_sta_reconnect_timer) != ESP_OK) {
+                    ESP_LOGW(TAG, "Failed to create reconnect timer");
+                }
+            }
+            if (s_sta_reconnect_timer) {
+                esp_timer_stop(s_sta_reconnect_timer);
+                esp_timer_start_once(s_sta_reconnect_timer, delay_ms * 1000ULL);
+                ESP_LOGI(TAG, "Scheduling STA reconnect in %llu ms", (unsigned long long)delay_ms);
+            }
         }
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         s_wifi_disconnects++;
@@ -765,6 +797,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, voi
         ip_event_got_ip_t* event = (ip_event_got_ip_t*)data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+        // Reset connectivity watchdog on success
+        s_net_failures = 0;
+        s_net_first_fail_ms = 0;
+        // Stop any pending reconnect timer
+        if (s_sta_reconnect_timer) {
+            esp_timer_stop(s_sta_reconnect_timer);
+        }
         if (s_portal_active) {
             ESP_LOGI(TAG, "STA connected - stopping portal");
             stop_portal();
@@ -778,10 +817,40 @@ static void wifi_event_handler(void* arg, esp_event_base_t base, int32_t id, voi
     }
 }
 
+static void sta_reconnect_cb(void* arg) {
+    uint64_t now_ms = (uint64_t)(esp_timer_get_time()/1000ULL);
+    ESP_LOGI(TAG, "Reconnect timer fired: attempting STA reconnect");
+    esp_wifi_connect();
+    s_last_sta_connect_ms = now_ms;
+}
+
+// Connectivity watchdog: record successes/failures and open captive portal if network is unreachable
+static void net_fail_report(bool ok) {
+    uint64_t now = millis64();
+    if (ok) {
+        s_net_failures = 0;
+        s_net_first_fail_ms = 0;
+        return;
+    }
+    if (s_net_first_fail_ms == 0 || (now - s_net_first_fail_ms) > NET_FAIL_WINDOW_MS) {
+        s_net_first_fail_ms = now;
+        s_net_failures = 0;
+    }
+    s_net_failures++;
+    if (!s_portal_active && s_net_failures >= NET_FAIL_THRESHOLD) {
+        ESP_LOGW(TAG, "Network failures=%d within %llu ms -> starting captive portal for reconfiguration", s_net_failures, (unsigned long long)(now - s_net_first_fail_ms));
+        start_portal();
+        s_net_failures = 0;
+        s_net_first_fail_ms = 0;
+    }
+}
+
 static void wifi_init_sta(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
     ESP_LOGI(TAG, "WiFi STA started (stored creds if present)");
+    // Kick off immediate connection attempt to stored credentials
+    esp_wifi_connect();
 }
 
 // (Provisioning manager removed) using custom portal functions.
@@ -874,6 +943,8 @@ static esp_err_t http_post_json(const char* url, const char* json, char* resp, s
     esp_err_t err = esp_http_client_open(client, len);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "http_post_json: open failed %s", esp_err_to_name(err));
+        net_fail_report(false);
+
         esp_http_client_cleanup(client);
         return err;
     }
@@ -896,6 +967,9 @@ static esp_err_t http_post_json(const char* url, const char* json, char* resp, s
         resp[total] = 0;
         ESP_LOGD(TAG, "http_post_json: body_len=%d body='%.*s'", total, total, resp);
     }
+
+    int status_local = http_status ? *http_status : esp_http_client_get_status_code(client);
+    net_fail_report((status_local >= 200 && status_local < 300));
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -1207,6 +1281,8 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
     switch (event_id) {
         case MQTT_EVENT_CONNECTED: {
             ESP_LOGI(TAG, "MQTT connected");
+            net_fail_report(true);
+
             int msg_id = esp_mqtt_client_subscribe(s_mqtt, s_mqtt_topic_geral, 1);
             ESP_LOGI(TAG, "Subscribed to: %s (msg_id=%d)", s_mqtt_topic_geral, msg_id);
 
@@ -1219,6 +1295,14 @@ static void mqtt_event_handler(void* handler_args, esp_event_base_t base, int32_
             if (s_update_pending.updateCompleted && strlen(s_update_pending.correlationId) > 0) {
                 xTaskCreate(mqtt_post_restart_success_task, "mqtt_post_restart_success", 3072, NULL, 5, NULL);
             }
+        } break;
+        case MQTT_EVENT_DISCONNECTED: {
+            ESP_LOGW(TAG, "MQTT disconnected");
+            net_fail_report(false);
+        } break;
+        case MQTT_EVENT_ERROR: {
+            ESP_LOGW(TAG, "MQTT error: event_id=%d err_type=%d", (int)event_id, (int)e->error_handle ? e->error_handle->error_type : -1);
+            net_fail_report(false);
         } break;
             case MQTT_EVENT_PUBLISHED: {
                 ESP_LOGI(TAG, "MQTT published (msg_id=%d)", e->msg_id);
