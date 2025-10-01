@@ -42,7 +42,7 @@
 #include "lwip/inet.h"
 
 // ========================= Config =========================
-#define FIRMWARE_VERSION "1.8"
+#define FIRMWARE_VERSION "3.2.5"
 #define URL_ADD_TDS                     "https://smartsensordesign.xyz/flowhall/api/add-tds"
 
 // Wi-Fi credentials now provided only via BLE provisioning (no hardcoded defaults)
@@ -300,6 +300,16 @@ static esp_err_t scan_get_handler(httpd_req_t *req) {
     httpd_resp_sendstr(req, s_scan_json[0] ? s_scan_json : "[]");
     // Hint background task to refresh soon
     s_scan_request = true;
+    // While the portal is active we still want to keep STA reconnect attempts alive so that
+    // if the original network returns the device auto-recovers without user action.
+    if (s_portal_active && have_sta_creds()) {
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time()/1000ULL);
+        if (s_last_sta_connect_ms == 0 || (now_ms - s_last_sta_connect_ms) >= 3000) {
+            ESP_LOGI(TAG, "Portal scan hit: attempting background STA reconnect");
+            esp_wifi_connect();
+            s_last_sta_connect_ms = now_ms;
+        }
+    }
     return ESP_OK;
 }
 
@@ -897,8 +907,11 @@ static bool mdns_advertise(void) {
     char suffix[7];
     sprintf(suffix, "%02X%02X%02X", mac[3], mac[4], mac[5]);
 
-    char host[22];
-    sprintf(host, "Purific-%s", suffix);
+    char mac_colons[18];
+    mac_to_str(mac, mac_colons, sizeof(mac_colons), true);
+
+    char host[40];
+    sprintf(host, "Flow Hall-%s", mac_colons);
 
     ESP_ERROR_CHECK(mdns_init());
     mdns_hostname_set(host);
@@ -909,8 +922,6 @@ static bool mdns_advertise(void) {
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
 
     // TXT records
-    char mac_colons[18];
-    mac_to_str(mac, mac_colons, sizeof(mac_colons), true);
     mdns_service_txt_item_set("_http", "_tcp", "mac", suffix);
     mdns_service_txt_item_set("_http", "_tcp", "id", mac_colons);
     mdns_service_txt_item_set("_http", "_tcp", "device", "Purific");
