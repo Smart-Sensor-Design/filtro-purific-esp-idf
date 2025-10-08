@@ -42,9 +42,11 @@
 #include "lwip/inet.h"
 
 // ========================= Config =========================
-#define FIRMWARE_VERSION "3.2.5"
+#define FIRMWARE_VERSION "3.2.6"
 #define URL_ADD_TDS                     "https://smartsensordesign.xyz/flowhall/api/add-tds"
-
+#ifndef DEVICE_TYPE
+#define DEVICE_TYPE "purificador"
+#endif
 // Wi-Fi credentials now provided only via BLE provisioning (no hardcoded defaults)
 static double s_tds_value = 0.0; // último TDS calculado
 static bool   s_tds_valid = false; // true se houve leitura TDS recente
@@ -1001,8 +1003,10 @@ static void send_ip_to_backend(void) {
         sprintf(ip_str, IPSTR, IP2STR(&ip.ip));
     }
 
-    char payload[192];
-    snprintf(payload, sizeof(payload), "{\"id\":\"%s\",\"ip_address\":\"%s\"}", mac_str, ip_str);
+    char payload[256];
+    snprintf(payload, sizeof(payload),
+             "{\"id\":\"%s\",\"ip_address\":\"%s\",\"device_model\":\"%s\"}",
+             mac_str, ip_str, DEVICE_TYPE);
 
     int status = 0;
     esp_err_t err = http_post_json(URL_DEVICE_IP, payload, NULL, 0, &status);
@@ -1184,9 +1188,11 @@ static inline void step_sleep_nat(void) { gpio_set_level(PIN_RSTSLP_NAT, 0); }
 static void step_pulse_shared(int steps) {
     for (int i = 0; i < steps; ++i) {
         gpio_set_level(PIN_STEP_SHARED, 1);
-        ets_delay_us(10000); // 10ms pulse width total cycle 20ms ~50Hz (conservative)
+        // Replace deprecated/internal ets_delay_us with FreeRTOS-friendly vTaskDelay
+        // 10000 us == 10 ms
+        vTaskDelay(pdMS_TO_TICKS(10));
         gpio_set_level(PIN_STEP_SHARED, 0);
-        ets_delay_us(10000);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
