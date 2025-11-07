@@ -70,8 +70,8 @@ static bool   s_tds_valid = false; // true se houve leitura TDS recente
 #define PIN_FLP                   GPIO_NUM_18
 #define PIN_RSTSLP_COLD           GPIO_NUM_19
 #define PIN_STEP_SHARED           GPIO_NUM_20
-#define PIN_DIR_SHARED            GPIO_NUM_21
 #define PIN_ENABLE_SHARED         GPIO_NUM_22
+#define PIN_DIR_SHARED            GPIO_NUM_21
 #define PIN_RSTSLP_NAT            GPIO_NUM_23
 #define WIFI_RESET_GPIO            PIN_WIFI_RESET_NEW   // Legacy name now points to new pin IO11
 #define HALL_GPIO                  PIN_HALL_NEW         // Legacy name now points to new hall sensor IO13
@@ -982,7 +982,7 @@ static esp_err_t http_post_json(const char* url, const char* json, char* resp, s
     }
 
     int status_local = http_status ? *http_status : esp_http_client_get_status_code(client);
-    net_fail_report((status_local >= 200 && status_local < 300));
+    net_fail_report((status_local >= 200 && status_local < 300) || status_local == 422);
 
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -1268,8 +1268,8 @@ static void ota_task(void* pv) {
     };
     esp_https_ota_config_t ota_cfg = {
         .http_config = &http_cfg,
-        .partial_http_download = false,
-        .max_http_request_size = 0,
+        // Fields like partial_http_download/max_http_request_size were removed in ESP-IDF 6.
+        // Default behavior (no partial download) is fine for our binary sizes.
     };
 
     ESP_LOGI(TAG, "Starting OTA from %s", url_with_chip);

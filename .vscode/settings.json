@@ -1,3 +1,17 @@
 {
-    "idf.pythonInstallPath": "/Volumes/Externo/esp/.espressif/python_env/idf6.0_py3.14_env/bin/python"
+  "idf.pythonInstallPath": "/Volumes/Externo/esp/.espressif/python_env/idf6.0_py3.14_env/bin/python",
+  "idf.openOcdConfigs": [
+    "board/esp32c6-builtin.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32c6"
+  },
+  "clangd.path": "/Users/wvernaschi/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=/Users/wvernaschi/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20250929/riscv32-esp-elf/bin/riscv32-esp-elf-gcc",
+    "--compile-commands-dir=/Volumes/Externo/Smart-Sensor-Design/filtro-purific-esp-idf/build"
+  ],
+  "idf.port": "/dev/tty.usbserial-0001",
+  "idf.flashType": "UART"
 }
