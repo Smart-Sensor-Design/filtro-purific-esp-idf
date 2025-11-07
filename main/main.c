@@ -913,7 +913,7 @@ static bool mdns_advertise(void) {
     mac_to_str(mac, mac_colons, sizeof(mac_colons), true);
 
     char host[40];
-    sprintf(host, "Flow Hall-%s", mac_colons);
+    sprintf(host, "Purific-%s", mac_colons);
 
     ESP_ERROR_CHECK(mdns_init());
     mdns_hostname_set(host);
