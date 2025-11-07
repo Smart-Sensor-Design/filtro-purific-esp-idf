@@ -1,1 +1,38 @@
+# Build artifacts
 build/
+
+# Local IDE settings (user-specific paths)
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+# But ignore user-specific settings if present
+.vscode/settings.json
+
+# macOS metadata
+.DS_Store
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Editor/Tooling local caches
+.idea/
+*.iml
+.clangd/
+.cache/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# ESP-IDF local files that are machine-specific
+sdkconfig.old
+sdkconfig.defaults.old
+local.mk
+
+# Optional: certificate/key materials - comment out if you intend to track them
+# cert*.pem
+# key*.pem
