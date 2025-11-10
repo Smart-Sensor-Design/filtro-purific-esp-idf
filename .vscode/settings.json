@@ -12,6 +12,6 @@
     "--query-driver=/Users/wvernaschi/.espressif/tools/riscv32-esp-elf/esp-15.2.0_20250929/riscv32-esp-elf/bin/riscv32-esp-elf-gcc",
     "--compile-commands-dir=/Volumes/Externo/Smart-Sensor-Design/filtro-purific-esp-idf/build"
   ],
-  "idf.port": "/dev/tty.usbserial-0001",
+  "idf.port": "/dev/tty.usbmodemRQCXB03B5XA2",
   "idf.flashType": "UART"
 }

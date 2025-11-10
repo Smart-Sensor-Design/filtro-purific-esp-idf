@@ -535,7 +535,7 @@ static void start_portal(void) {
     esp_wifi_set_mode(WIFI_MODE_APSTA);
     wifi_config_t ap = {0};
     uint8_t mac[6]; esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf((char*)ap.ap.ssid, sizeof(ap.ap.ssid), "FLOWHALL-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    snprintf((char*)ap.ap.ssid, sizeof(ap.ap.ssid), "Purific-%02X%02X%02X", mac[3], mac[4], mac[5]);
     ap.ap.ssid_len = strlen((char*)ap.ap.ssid);
     ap.ap.channel = 1;
     ap.ap.max_connection = 4;
