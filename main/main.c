@@ -42,7 +42,7 @@
 #include "lwip/inet.h"
 
 // ========================= Config =========================
-#define FIRMWARE_VERSION "3.2.6"
+#define FIRMWARE_VERSION "3.2.7"
 #define URL_ADD_TDS                     "https://smartsensordesign.xyz/flowhall/api/add-tds"
 #ifndef DEVICE_TYPE
 #define DEVICE_TYPE "purificador"
@@ -51,6 +51,8 @@
 static double s_tds_value = 0.0; // último TDS calculado
 static bool   s_tds_valid = false; // true se houve leitura TDS recente
 
+#define TENANT_HEADER_NAME   "X-Tenant"
+#define TENANT_HEADER_VALUE  "PURIFIC"
 
 
 // New board pin mapping (added for valve stepper control) from Arduino reference:
@@ -952,6 +954,8 @@ static esp_err_t http_post_json(const char* url, const char* json, char* resp, s
 
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_header(client, "Accept", "application/json,text/plain,*/*");
+    esp_http_client_set_header(client, TENANT_HEADER_NAME, TENANT_HEADER_VALUE);
+
     size_t len = strlen(json);
     esp_err_t err = esp_http_client_open(client, len);
     if (err != ESP_OK) {
@@ -1242,6 +1246,12 @@ static void handle_dispensing(void) {
         ESP_LOGI(TAG, "Dispensing complete");
     }
 }
+static esp_err_t ota_http_client_init_cb(esp_http_client_handle_t http)
+{
+    // Define o header do tenant em TODAS as requisições feitas pelo OTA
+    esp_http_client_set_header(http, TENANT_HEADER_NAME, TENANT_HEADER_VALUE);
+    return ESP_OK;
+}
 
 static void ota_task(void* pv) {
     char* correlation = (char*)pv;
@@ -1268,6 +1278,7 @@ static void ota_task(void* pv) {
     };
     esp_https_ota_config_t ota_cfg = {
         .http_config = &http_cfg,
+        .http_client_init_cb = ota_http_client_init_cb,
         // Fields like partial_http_download/max_http_request_size were removed in ESP-IDF 6.
         // Default behavior (no partial download) is fine for our binary sizes.
     };
