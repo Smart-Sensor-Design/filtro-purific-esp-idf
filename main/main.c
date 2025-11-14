@@ -42,7 +42,7 @@
 #include "lwip/inet.h"
 
 // ========================= Config =========================
-#define FIRMWARE_VERSION "3.2.7"
+#define FIRMWARE_VERSION "3.2.8"
 #define URL_ADD_TDS                     "https://smartsensordesign.xyz/flowhall/api/add-tds"
 #ifndef DEVICE_TYPE
 #define DEVICE_TYPE "purificador"
