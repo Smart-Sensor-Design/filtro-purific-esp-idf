@@ -70,16 +70,13 @@ static bool   s_tds_valid = false; // true se houve leitura TDS recente
 #define PIN_WIFI_RESET_NEW        GPIO_NUM_11
 #define PIN_HALL_NEW              GPIO_NUM_13
 
-#define PIN_FLP                   GPIO_NUM_23
+#define PIN_FLP                   GPIO_NUM_18
+#define PIN_RSTSLP_COLD           GPIO_NUM_19
+#define PIN_STEP_SHARED           GPIO_NUM_20
+#define PIN_ENABLE_SHARED         GPIO_NUM_22
+#define PIN_DIR_SHARED            GPIO_NUM_21
+#define PIN_RSTSLP_NAT            GPIO_NUM_23
 
-#define PIN_RSTSLP_COLD           GPIO_NUM_18
-
-#define PIN_STEP_SHARED           GPIO_NUM_19
-
-#define PIN_ENABLE_SHARED         GPIO_NUM_20
-
-#define PIN_DIR_SHARED            GPIO_NUM_22
-#define PIN_RSTSLP_NAT            GPIO_NUM_21
 #define WIFI_RESET_GPIO            PIN_WIFI_RESET_NEW   // Legacy name now points to new pin IO11
 #define HALL_GPIO                  PIN_HALL_NEW         // Legacy name now points to new hall sensor IO13
 #define FLOW_SAMPLE_MS          100   // calcular fluxo a cada 100ms
